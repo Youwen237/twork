@@ -8,10 +8,11 @@ import telegram.error
 from telethon import events,types,errors
 from telegram.error import BadRequest
 
-from telegram import InputMediaDocument, InputMediaPhoto, InputMediaVideo
+from telegram import InputMediaDocument, InputMediaPhoto, InputMediaVideo, Update
+from telegram.ext import CallbackContext
 from telegram.constants import ParseMode, MessageEntityType
 from telethon.errors import WorkerBusyTooLongRetryError
-from telethon.tl.types import InputMessagesFilterEmpty, Message, User, Chat, Channel, MessageMediaWebPage
+from telethon.tl.types import InputMessagesFilterEmpty, Message, User, Chat, Channel, MessageMediaWebPage, MessageMediaPhoto
 from collections import defaultdict
 from peewee import PostgresqlDatabase, Model, CharField, BigIntegerField, CompositeKey, fn, AutoField 
 
@@ -510,7 +511,8 @@ class lybot:
                                     send_message_text = "👆🏻 Comparte el código en grupos; los nuevos usuarios que lo usen te dan recompensas adicionales. "
                                 elif language_code == 'ar':
                                     send_message_text = "👆🏻 شارك الرمز في المجموعات؛ يمنحك المستخدمون الجدد الذين يستخدمونه مكافآت إضافية. "
-                               
+                                else:
+                                    send_message_text = "👆🏻 学会分享代码到聊天群，您将可获得额外的奖励 "
 
                                 # 如果 send_message_text 有值且非空
                                 if send_message_text:
@@ -518,6 +520,7 @@ class lybot:
                                     await context.bot.send_message(
                                         chat_id=update.message.chat.id,
                                         text=send_message_text,
+                                        rotect_content=True,
                                         parse_mode=ParseMode.HTML
             )
 
@@ -1007,13 +1010,15 @@ class lybot:
                 entity_title = f'Unknown entity {entity.id}'
 
             # 设一个黑名单列表，如果 entity.id 在黑名单列表中，则跳过
-            blacklist = [777000,93372553]
+            # blacklist = [777000,93372553]
+            blacklist = [777000,93372553,6976547743,291481095]
+            
 
             if entity.id in blacklist:
                 NEXT_DIALOGS = True
                 continue
 
-            if dialog.unread_count > 0 and (dialog.is_user):
+            if dialog.unread_count >= 0 and (dialog.is_user):
                 time.sleep(0.5)  # 每次请求之间等待0.5秒
                 
                 # print(f">Reading messages from entity {entity.id} {entity_title} - U:{dialog.unread_count} \n", flush=True)
@@ -1025,6 +1030,26 @@ class lybot:
             
                     ## 如果是 media 类型的消息
                     if message.media and not isinstance(message.media, MessageMediaWebPage):
+                        print(f"Media message: {message}", flush=True)
+
+
+                        # if isinstance(message.media, MessageMediaPhoto):  # 如果是照片
+                        #     try:
+                        #         # 下载图片并保存
+                        #         file_path = await message.download_media(file='downloads/')
+                        #         print(f"Downloaded photo to {file_path}", flush=True)
+
+                        #          # 将照片转发给 @bot123
+                        #         bot_username = '@filetobot'  # 机器人用户名
+                        #         await client.forward_messages(bot_username, message.id, entity)  # 转发照片
+
+                        #         print(f"Forwarded photo to {bot_username}", flush=True)
+
+                        #     except Exception as e:
+                        #         print(f"Error downloading photo: {e}", flush=True)
+                        #         traceback.print_exc()
+
+
                         time.sleep(1)  # 每次请求之间等待0.5秒
                         if dialog.is_user:
                             try:
@@ -1142,7 +1167,26 @@ class lybot:
             print(f"WorkerBusyTooLongRetryError encountered. Skipping message {message.id}.")
         except Exception as e:
             print(f"An error occurred here 1144: {e}")
+            #取得错误的行号
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            line_number = exc_tb.tb_lineno
+            print(f"Error at line {line_number}")
+            print(f"destination_chat_id: {destination_chat_id}")
+            traceback.print_exc()
+        return None
+    
         
+    async def set_command(self,update: Update, context: CallbackContext) -> None:
+        """处理 /set 命令，存储用户的键值设置"""
+        if len(context.args) < 2:
+            await update.message.reply_text("用法: /set <键> <值>\n示例: /set warehouse_chat_id 200321231")
+            return
+        
+        key = context.args[0]
+        value = " ".join(context.args[1:])  # 允许值包含空格
+        user_id = update.effective_user.id
+
+        self.setting[key] = value
 
 
 

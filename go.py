@@ -54,7 +54,7 @@ except ValueError:
     
 #max_process_time 設為 600 秒，即 10 分鐘
 max_process_time = 1500  # 10分钟
-max_media_count = 55  # 10个媒体文件
+max_media_count = 30  # 10个媒体文件
 max_count_per_chat = 11  # 每个对话的最大消息数
 max_break_time = 90  # 休息时间
 
@@ -223,7 +223,7 @@ async def main():
 
             # 如果 tgbot.setting 不存在，使用空字典作为默认值
             blacklist = (tgbot.setting or {}).get('blacklist', [])
-            blacklist.append(int(tgbot.config['setting_chat_id']))
+            
 
             # 如果 tgbot.setting 中的 warehouse_chat_id 有值，则更新 tgbot.config 中的 warehouse_chat_id
             if 'warehouse_chat_id' in tgbot.setting:

@@ -170,5 +170,10 @@ last_read_message_id.json
 *.session.enc
 *.stringsession.enc
 
-
+matrial/
 23239948session_name.session-journal
+.DS_Store
+.env
+
+.*.env
+28817994session_name.session-journal

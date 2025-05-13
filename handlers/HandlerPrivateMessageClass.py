@@ -6,6 +6,8 @@ from model.scrap_config import ScrapConfig  # ✅ Peewee ORM model
 from model.media_index import MediaIndex  # ✅ Peewee ORM model
 from peewee import DoesNotExist
 from utils.media_utils import generate_media_key
+from utils.send_safe import wait_for_send_slot
+from telethon.errors import ChannelPrivateError
 
 class HandlerPrivateMessageClass:
     def __init__(self, client, entity, message, extra_data):
@@ -15,9 +17,10 @@ class HandlerPrivateMessageClass:
         self.extra_data = extra_data
         self.delete_after_process = False
         self.forward_pattern = re.compile(r'\|_forward_\|\@(-?\d+|[a-zA-Z0-9_]+)')
+        self._fallback_chat_ids_cache = None  # ✅ 实例缓存
 
     async def handle(self):
-        fallback_chat_ids = self.get_fallback_chat_ids()
+        fallback_chat_ids = await self.get_fallback_chat_ids()
         forwared_success = True
 
         # 打印来源
@@ -25,7 +28,7 @@ class HandlerPrivateMessageClass:
         last_name = getattr(self.entity, "last_name", "") or ""
         entity_title = f"{first_name} {last_name}".strip()
         # print(f"[User] Message from {entity_title} ({self.entity.id}): {self.message.text}")
-        print(f"[User] Message from {entity_title} ({self.entity.id}): {self.message.id}")
+        print(f"\r\n[User] Message from {entity_title} ({self.entity.id}): {self.message.id}")
 
         if self.message.media and not isinstance(self.message.media, MessageMediaWebPage):
             grouped_id = getattr(self.message, 'grouped_id', None)
@@ -53,6 +56,8 @@ class HandlerPrivateMessageClass:
                     # print("⚠️ 無 chat_id 可用，跳過相簿", flush=True)
                     return
 
+                await wait_for_send_slot(target_chat_id)
+                print("\r\n")
                 forwared_success = await safe_forward_or_send(
                     self.client,
                     self.message.id,
@@ -100,7 +105,8 @@ class HandlerPrivateMessageClass:
 
                     if not exists:
                         
-
+                        await wait_for_send_slot(target_chat_id)
+                       
                         forwared_success = await safe_forward_or_send(
                             self.client,
                             self.message.id,
@@ -114,6 +120,8 @@ class HandlerPrivateMessageClass:
 
 
                         if not forwared_success and back_target_chat_id != None:
+                            await wait_for_send_slot(back_target_chat_id)
+                            print("Try again:")
                             forwared_success = await safe_forward_or_send(
                                 self.client,
                                 self.message.id,
@@ -142,23 +150,85 @@ class HandlerPrivateMessageClass:
             await self.safe_delete_message()
         else:
             await self.safe_delete_message()
-        
-    def get_fallback_chat_ids(self):
+
+
+    async def is_still_in_group_by_id(self,chat_id):
         try:
-            # print(f"🔍 正在查找 FORWARD_TARGETS {self.extra_data['app_id']}", flush=True)
+            entity = await self.client.get_entity(chat_id)
+            async for _ in self.client.iter_participants(entity, limit=1):
+                return True
+        except ChannelPrivateError:
+            return False
+        except Exception as e:
+            print(f"⚠️ 检查 {chat_id} 失败: {e}")
+            return False
+
+    async def get_fallback_chat_ids(self):
+        if self._fallback_chat_ids_cache is not None:
+            return self._fallback_chat_ids_cache
+
+        try:
+            setting_chat_id = self.extra_data.get('config', {}).get('setting_chat_id')
+            setting_thread_id = self.extra_data.get('config', {}).get('setting_thread_id')
+
             record = ScrapConfig.get(
                 (ScrapConfig.api_id == self.extra_data['app_id']) &
                 (ScrapConfig.title == 'FORWARD_TARGETS')
             )
             raw = record.value or ''
-            return [int(x.strip()) for x in raw.split(',') if x.strip().isdigit()]
+            original_ids = [int(x.strip()) for x in raw.split(',') if x.strip().isdigit()]
+
+            print(f"检测 FORWARD_TARGETS，共 {len(original_ids)} 个")
+
+            # ✅ 逐个检查，并只保留还在群里的 ID
+            valid_ids = []
+            for chat_id in original_ids:
+                if await self.is_still_in_group_by_id(chat_id):
+                    print(f"✅ 仍在群 {chat_id}")
+                    valid_ids.append(chat_id)
+                else:
+                    
+                   
+                    await self.client.send_message(
+                        entity=setting_chat_id,
+                        message=f"⚠️ {chat_id}",
+                        reply_to=setting_thread_id,
+                        parse_mode='html'
+                    )
+                    print(f"❌ 不在群 {chat_id} 或群已不存在")
+
+            # 若valid_ids 为空，则传信息给设置群
+            if not valid_ids:
+                await self.client.send_message(
+                    entity=setting_chat_id,
+                    message="⚠️ FORWARD_TARGETS 为空",
+                    reply_to=setting_thread_id,
+                    parse_mode='html'
+                )
+                print("⚠️ FORWARD_TARGETS 为空")
+
+
+            # ✅ 检查变化并更新数据库（注意：放在循环外）
+            if set(valid_ids) != set(original_ids):
+                new_value = ','.join(str(chat_id) for chat_id in valid_ids)
+                record.value = new_value
+                record.save()
+                print(f"📝 已更新 ScrapConfig，当前有效群: {new_value}")
+
+            self._fallback_chat_ids_cache = valid_ids  # ✅ 缓存有效的 ID
+           
+            return valid_ids
+
         except DoesNotExist:
             print("⚠️ scrap_config 中找不到 FORWARD_TARGETS")
+            self._fallback_chat_ids_cache = []
             return []
+
+
 
     async def safe_delete_message(self):
         try:
             await self.client.delete_messages(self.message.chat_id, [self.message.id], revoke=True)
-            print(f"🧹 成功刪除訊息 {self.message.id}（雙方）", flush=True)
+            print(f"🧹 成功刪除訊息C {self.message.id}（雙方）", flush=True)
         except Exception as e:
-            print(f"⚠️ 刪除訊息失敗 {self.message.id}：{e}", flush=True)
+            print(f"⚠️ 刪除訊息失敗C {self.message.id}：{e}", flush=True)
